@@ -1,0 +1,28 @@
+version: "3.7"
+
+services:
+  nginx:
+    image: nginx
+    ports:
+      - 80:80
+    volumes:
+      - ./zmisc/nginx.conf:/etc/nginx/nginx.conf
+    environment:
+      - NGINX_PORT=80
+
+  rabbitmq:
+    image: rabbitmq:3.12.8-management
+    ports:
+      - 5672:5672
+      - 15672:15672
+
+  go-chat:
+    build: .
+    ports:
+      - 8080
+    deploy:
+      mode: replicated
+      replicas: 3
+    command: ./bin/api
+    environment:
+      - RABBITMQ_HOST=amqp://rabbitmq:5672/
