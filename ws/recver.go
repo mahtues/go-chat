@@ -1,4 +1,4 @@
-package channeling
+package ws
 
 import (
 	"sync"
@@ -50,39 +50,15 @@ func (r *Recver) loop() {
 		outch       chan frame.Frame = nil
 	)
 
-	recv := func() {
-		var frm frame.Frame
-		err := websocket.JSON.Receive(r.ws, &frm) // blocking
-		if err != nil {
-			errch <- err
-		} else {
-			framech <- frm
-		}
-	}
-
-	defer func() {
-		close(r.outch)
-
-		// handle hanging recv() goroutine
-		if framech != nil || errch != nil {
-			go func() {
-				select {
-				case <-errch:
-				case <-framech:
-				}
-				close(errch)
-				close(framech)
-			}()
-		}
-	}()
-
 	framech, errch, outch = framechmemo, errchmemo, nil
-	go recv()
+	go recv(r.ws, framech, errch)
 
 	for {
 		select {
-		case close := <-r.closech:
-			close <- err
+		case closech := <-r.closech:
+			closech <- err
+			close(r.outch)
+			cleanup(framech, errch)
 			return
 		case err = <-errch:
 			framech, errch, outch = nil, nil, nil
@@ -91,7 +67,29 @@ func (r *Recver) loop() {
 			framech, errch, outch = nil, nil, r.outch
 		case outch <- frm:
 			framech, errch, outch = framechmemo, errchmemo, nil
-			go recv()
+			go recv(r.ws, framech, errch)
 		}
+	}
+}
+
+func recv(ws *websocket.Conn, framech chan<- frame.Frame, errch chan<- error) {
+	var frm frame.Frame
+	err := websocket.JSON.Receive(ws, &frm) // blocking
+	if err != nil {
+		errch <- err
+	} else {
+		framech <- frm
+	}
+}
+
+func cleanup(framech <-chan frame.Frame, errch <-chan error) {
+	// handle hanging recv() goroutine
+	if framech != nil || errch != nil {
+		go func() {
+			select {
+			case <-errch:
+			case <-framech:
+			}
+		}()
 	}
 }

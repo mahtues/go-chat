@@ -16,6 +16,7 @@ type Frame struct {
 	*TextTo     `json:"text_to,omitempty"`
 	*TextFrom   `json:"text_from,omitempty"`
 	*Disconnect `json:"disconnect,omitempty"`
+	*Debug      `json:"debug,omitempty"`
 }
 
 type TextTo struct {
@@ -29,4 +30,10 @@ type TextFrom struct {
 }
 
 type Disconnect struct {
+}
+
+type Debug struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Text string `json:"text"`
 }

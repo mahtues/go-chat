@@ -9,6 +9,7 @@ import (
 
 	"github.com/mahtues/go-chat/frame"
 	"github.com/mahtues/go-chat/misc"
+	"github.com/mahtues/go-chat/ws"
 	"golang.org/x/net/websocket"
 )
 
@@ -28,17 +29,15 @@ func main() {
 
 	log.Printf("url=%+v", url)
 
-	ws, err := websocket.Dial(url, "", "http://localhost/")
+	wsconn, err := websocket.Dial(url, "", "http://localhost/")
 	if err != nil {
 		log.Fatalf("dial failed: %v", err)
 	}
-
-	conn := NewConn(ws, 10)
+	defer wsconn.Close()
 
 	go func() {
-		log.Printf("conn.Receive range start")
-		defer log.Printf("conn.Receive range exit")
-		for f := range conn.Receive() {
+		recv := ws.NewRecver(wsconn)
+		for f := range recv.Ch() {
 			log.Printf("frame: %+v", f)
 		}
 	}()
@@ -47,47 +46,10 @@ func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 	for fmt.Printf("> "); scanner.Scan(); fmt.Printf("> ") {
 		text := scanner.Text()
-		err := conn.Send(frame.Frame{Id: id, TextTo: &frame.TextTo{"mahtues", text}})
+		err := websocket.JSON.Send(wsconn, frame.Frame{Id: id, TextTo: &frame.TextTo{"guest", text}})
 		if err != nil {
 			log.Fatalf("send text failed: %v", err)
 		}
 		id++
-	}
-}
-
-type Conn struct {
-	ws         *websocket.Conn
-	pending    []frame.Frame
-	maxPending uint64
-	lastErr    error
-	out        chan frame.Frame
-}
-
-func NewConn(ws *websocket.Conn, maxPending uint64) *Conn {
-	conn := &Conn{
-		ws:         ws,
-		pending:    make([]frame.Frame, 0, maxPending),
-		maxPending: maxPending,
-		lastErr:    nil,
-	}
-	go conn.loop()
-	return conn
-}
-
-func (c *Conn) Receive() <-chan frame.Frame {
-	return c.out
-}
-
-func (c *Conn) Send(frame frame.Frame) error {
-	return websocket.JSON.Send(c.ws, frame)
-}
-
-func (c *Conn) Close() error {
-	return c.lastErr
-}
-
-func (c *Conn) loop() {
-	for {
-		select {}
 	}
 }
