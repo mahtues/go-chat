@@ -5,15 +5,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 
-	"github.com/mahtues/go-chat/frame"
-	"github.com/mahtues/go-chat/misc"
-	amqp "github.com/rabbitmq/amqp091-go"
 	"golang.org/x/net/websocket"
+
+	"github.com/mahtues/go-chat/frame"
+	"github.com/mahtues/go-chat/log"
+	"github.com/mahtues/go-chat/misc"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 var (
@@ -25,12 +27,12 @@ var (
 	rabbitMqUrlEnv = os.Getenv("rabbitmq-url")
 	rabbitMqUrl    = "amqp://localhost:5672"
 
-	infof  = log.Printf
-	errorf = log.Printf
+	infof  = log.Infof
+	errorf = log.Errorf
+	fatalf = log.Fatalf
 )
 
 func main() {
-	log.SetFlags(log.Ldate | log.Ltime | log.LUTC | log.Lshortfile | log.Lmsgprefix)
 	flag.Parse()
 
 	var (
@@ -159,7 +161,7 @@ func main() {
 
 	err = http.ListenAndServe(":"+port, nil)
 	if err != nil {
-		log.Fatalf("listen error: %v", err)
+		fatalf("listen error: %v", err)
 	}
 }
 
