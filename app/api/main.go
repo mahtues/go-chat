@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	_ "net/http/pprof"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/mahtues/go-chat/frame"
 	"github.com/mahtues/go-chat/misc"
-	"github.com/mahtues/go-chat/ws"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"golang.org/x/net/websocket"
 )
@@ -68,62 +68,174 @@ func main() {
 			return
 		}
 
-		mqch, err := mqchan.Consume(mq.Name, "", true, false, false, false, nil)
+		mqinch, err := mqchan.Consume(mq.Name, "", true, false, false, false, nil)
 		if err != nil {
 			errorf("create mq consume channel failed: %v", err)
 			return
 		}
 
-		wsrecv := ws.NewRecver(wsconn)
-		defer wsrecv.Close()
-		wsinch := wsrecv.Ch()
+		type recvResult struct {
+			frame frame.Frame
+			err   error
+		}
 
-		wssend := ws.NewSender(wsconn)
-		wsoutch := wssend.Ch()
-		defer wssend.Close()
+		type sendResult struct {
+			err error
+		}
 
 		var (
-			mqfrm     frame.Frame
-			wsfrm     frame.Frame
-			enwsoutch chan<- frame.Frame = nil
-			delivery  amqp.Delivery
-			enmqch    <-chan amqp.Delivery = nil
-			ok        bool
-			abort     bool = false
+			// ws -> mq
+			//wsrecvch chan recvResult = make(chan recvResult)
+			//mqsendch chan sendResult = make(chan sendResult)
+
+			wsfrm          frame.Frame
+			wserr          error
+			wsfrmch        chan frame.Frame = nil
+			wsinerrch      chan error       = nil
+			mqoutokch      chan struct{}    = nil
+			mqouterrch     chan error       = nil
+			wsfrmchmemo    chan frame.Frame = make(chan frame.Frame)
+			wsinerrchmemo  chan error       = make(chan error)
+			mqoutokchmemo  chan struct{}    = make(chan struct{})
+			mqouterrchmemo chan error       = make(chan error)
+
+			// mq -> ws
+			mqfrm          frame.Frame
+			mqerr          error
+			mqfrmch        chan frame.Frame = nil
+			mqinerrch      chan error       = nil
+			wsoutokch      chan struct{}    = nil
+			wsouterrch     chan error       = nil
+			mqfrmchmemo    chan frame.Frame = make(chan frame.Frame)
+			mqinerrchmemo  chan error       = make(chan error)
+			wsoutokchmemo  chan struct{}    = make(chan struct{})
+			wsouterrchmemo chan error       = make(chan error)
 		)
 
-		enwsoutch, enmqch = nil, mqch
+		wsfrmch, wsinerrch, mqoutokch, mqouterrch = wsfrmchmemo, wsinerrchmemo, nil, nil
+		go wsrecv(wsconn, wsfrmch, wsinerrch)
+		mqfrmch, mqinerrch, wsoutokch, wsouterrch = mqfrmchmemo, mqinerrchmemo, nil, nil
+		go mqrecv(mqinch, mqfrmch, mqinerrch)
+
+		abort := false
 
 		for !abort {
 			select {
-			case wsfrm, ok = <-wsinch:
-				if !ok {
-					errorf("<-wsinch error: %v", err)
-					abort = true
-					break
-				}
-				b, _ := json.Marshal(wsfrm)
-				mqchan.Publish("", mq.Name, false, false, amqp.Publishing{ContentType: "application/json", Body: b})
-			case delivery, ok = <-enmqch:
-				if !ok {
-					abort = true
-					errorf("<-enmqch error: %v", err)
-					break
-				}
-				err = json.Unmarshal(delivery.Body, &mqfrm)
-				enwsoutch, enmqch = wsoutch, nil
-			case enwsoutch <- mqfrm:
-				// error handling missing
-				enwsoutch, enmqch = nil, mqch
+			case wsfrm = <-wsfrmch:
+				wsfrmch, wsinerrch, mqoutokch, mqouterrch = nil, nil, mqoutokchmemo, mqouterrchmemo
+				go mqsend(mqchan, wsfrm, mqoutokch, mqouterrch)
+			case <-mqoutokch:
+				wsfrmch, wsinerrch, mqoutokch, mqouterrch = wsfrmchmemo, wsinerrchmemo, nil, nil
+				go wsrecv(wsconn, wsfrmch, wsinerrch)
+			case wserr = <-mqouterrch:
+				errorf("error: %v", wserr)
+				abort = true
+				break
+			case wserr = <-wsinerrch:
+				errorf("error: %v", wserr)
+				abort = true
+				break
+
+			case mqfrm = <-mqfrmch:
+				mqfrmch, mqinerrch, wsoutokch, wsouterrch = nil, nil, wsoutokchmemo, wsouterrchmemo
+				go wssend(wsconn, mqfrm, wsoutokch, wsouterrch)
+			case <-wsoutokch:
+				mqfrmch, mqinerrch, wsoutokch, wsouterrch = mqfrmchmemo, mqinerrchmemo, nil, nil
+				go mqrecv(mqinch, mqfrmch, mqinerrch)
+			case mqerr = <-wsouterrch:
+				errorf("error: %v", mqerr)
+				abort = true
+				break
+			case mqerr = <-mqinerrch:
+				errorf("error: %v", mqerr)
+				abort = true
+				break
 			}
 		}
 
-		infof("clean up required")
+		if wsfrmch != nil {
+			go func() {
+				select {
+				case <-wsfrmch:
+				case <-wsinerrch:
+				}
+			}()
+		}
+
+		if mqoutokch != nil {
+			go func() {
+				select {
+				case <-mqoutokch:
+				case <-mqouterrch:
+				}
+			}()
+		}
+
+		if mqfrmch != nil {
+			go func() {
+				select {
+				case <-mqfrmch:
+				case <-mqinerrch:
+				}
+			}()
+		}
+
+		if wsoutokch != nil {
+			go func() {
+				select {
+				case <-wsoutokch:
+				case <-wsouterrch:
+				}
+			}()
+		}
 	}))
 
 	err = http.ListenAndServe(":"+port, nil)
 	if err != nil {
 		log.Fatalf("listen error: %v", err)
+	}
+}
+
+func wssend(wsconn *websocket.Conn, frm frame.Frame, okch chan struct{}, errch chan<- error) {
+	err := websocket.JSON.Send(wsconn, frm) // blocking. needs a goroutine
+	if err == nil {
+		okch <- struct{}{}
+	} else {
+		errch <- err
+	}
+}
+
+func wsrecv(wsconn *websocket.Conn, frmch chan<- frame.Frame, errch chan<- error) {
+	var frm frame.Frame
+	err := websocket.JSON.Receive(wsconn, &frm) // blocking. needs a goroutine
+	if err == nil {
+		frmch <- frm
+	} else {
+		errch <- err
+	}
+}
+
+func mqsend(mqchan *amqp.Channel, frm frame.Frame, okch chan<- struct{}, errch chan<- error) {
+	b, _ := json.Marshal(frm)
+	err := mqchan.Publish("", "guest", false, false, amqp.Publishing{ContentType: "application/json", Body: b}) // blocking. needs a goroutine
+	if err == nil {
+		okch <- struct{}{}
+	} else {
+		errch <- err
+	}
+}
+
+func mqrecv(mqinch <-chan amqp.Delivery, frmch chan<- frame.Frame, errch chan<- error) {
+	delivery, ok := <-mqinch
+	if !ok {
+		errch <- io.EOF
+	}
+	var frm frame.Frame
+	err := json.Unmarshal(delivery.Body, &frm)
+	if err == nil {
+		frmch <- frm
+	} else {
+		errch <- err
 	}
 }
 
