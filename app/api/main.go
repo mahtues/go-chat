@@ -74,119 +74,86 @@ func main() {
 			return
 		}
 
-		type recvResult struct {
-			frame frame.Frame
-			err   error
-		}
-
-		type sendResult struct {
-			err error
-		}
-
 		var (
 			// ws -> mq
-			//wsrecvch chan recvResult = make(chan recvResult)
-			//mqsendch chan sendResult = make(chan sendResult)
-
-			wsfrm          frame.Frame
-			wserr          error
-			wsfrmch        chan frame.Frame = nil
-			wsinerrch      chan error       = nil
-			mqoutokch      chan struct{}    = nil
-			mqouterrch     chan error       = nil
-			wsfrmchmemo    chan frame.Frame = make(chan frame.Frame)
-			wsinerrchmemo  chan error       = make(chan error)
-			mqoutokchmemo  chan struct{}    = make(chan struct{})
-			mqouterrchmemo chan error       = make(chan error)
+			wsrecvchmemo chan recvResult = make(chan recvResult)
+			mqsendchmemo chan sendResult = make(chan sendResult)
+			wsrecvch     chan recvResult = nil
+			mqsendch     chan sendResult = nil
 
 			// mq -> ws
-			mqfrm          frame.Frame
-			mqerr          error
-			mqfrmch        chan frame.Frame = nil
-			mqinerrch      chan error       = nil
-			wsoutokch      chan struct{}    = nil
-			wsouterrch     chan error       = nil
-			mqfrmchmemo    chan frame.Frame = make(chan frame.Frame)
-			mqinerrchmemo  chan error       = make(chan error)
-			wsoutokchmemo  chan struct{}    = make(chan struct{})
-			wsouterrchmemo chan error       = make(chan error)
+			mqrecvchmemo chan recvResult = make(chan recvResult)
+			wssendchmemo chan sendResult = make(chan sendResult)
+			mqrecvch     chan recvResult = nil
+			wssendch     chan sendResult = nil
 		)
 
-		wsfrmch, wsinerrch, mqoutokch, mqouterrch = wsfrmchmemo, wsinerrchmemo, nil, nil
-		go wsrecv(wsconn, wsfrmch, wsinerrch)
-		mqfrmch, mqinerrch, wsoutokch, wsouterrch = mqfrmchmemo, mqinerrchmemo, nil, nil
-		go mqrecv(mqinch, mqfrmch, mqinerrch)
+		wsrecvch, mqsendch = wsrecvchmemo, nil
+		go wsrecv(wsconn, wsrecvch)
+
+		mqrecvch, wssendch = mqrecvchmemo, nil
+		go mqrecv(mqinch, mqrecvch)
 
 		abort := false
 
 		for !abort {
 			select {
-			case wsfrm = <-wsfrmch:
-				wsfrmch, wsinerrch, mqoutokch, mqouterrch = nil, nil, mqoutokchmemo, mqouterrchmemo
-				go mqsend(mqchan, wsfrm, mqoutokch, mqouterrch)
-			case <-mqoutokch:
-				wsfrmch, wsinerrch, mqoutokch, mqouterrch = wsfrmchmemo, wsinerrchmemo, nil, nil
-				go wsrecv(wsconn, wsfrmch, wsinerrch)
-			case wserr = <-mqouterrch:
-				errorf("error: %v", wserr)
-				abort = true
-				break
-			case wserr = <-wsinerrch:
-				errorf("error: %v", wserr)
-				abort = true
-				break
+			case result := <-wsrecvch:
+				wsrecvch = nil
+				if result.err != nil {
+					errorf("error: %v", result.err)
+					abort = true
+					break
+				}
+				mqsendch = mqsendchmemo
+				go mqsend(mqchan, result.frame, mqsendch)
 
-			case mqfrm = <-mqfrmch:
-				mqfrmch, mqinerrch, wsoutokch, wsouterrch = nil, nil, wsoutokchmemo, wsouterrchmemo
-				go wssend(wsconn, mqfrm, wsoutokch, wsouterrch)
-			case <-wsoutokch:
-				mqfrmch, mqinerrch, wsoutokch, wsouterrch = mqfrmchmemo, mqinerrchmemo, nil, nil
-				go mqrecv(mqinch, mqfrmch, mqinerrch)
-			case mqerr = <-wsouterrch:
-				errorf("error: %v", mqerr)
-				abort = true
-				break
-			case mqerr = <-mqinerrch:
-				errorf("error: %v", mqerr)
-				abort = true
-				break
+			case result := <-mqsendch:
+				mqsendch = nil
+				if result.err != nil {
+					errorf("error: %v", result.err)
+					abort = true
+					break
+				}
+				wsrecvch = wsrecvchmemo
+				go wsrecv(wsconn, wsrecvch)
+
+			case result := <-mqrecvch:
+				mqrecvch = nil
+				if result.err != nil {
+					errorf("error: %v", result.err)
+					abort = true
+					break
+				}
+				wssendch = wssendchmemo
+				go wssend(wsconn, result.frame, wssendch)
+
+			case result := <-wssendch:
+				wssendch = nil
+				if result.err != nil {
+					errorf("error: %v", result.err)
+					abort = true
+					break
+				}
+				mqrecvch = mqrecvchmemo
+				go mqrecv(mqinch, mqrecvch)
 			}
 		}
 
-		if wsfrmch != nil {
-			go func() {
-				select {
-				case <-wsfrmch:
-				case <-wsinerrch:
-				}
-			}()
+		if wsrecvch != nil {
+			go func() { <-wsrecvch }()
 		}
 
-		if mqoutokch != nil {
-			go func() {
-				select {
-				case <-mqoutokch:
-				case <-mqouterrch:
-				}
-			}()
+		if mqsendch != nil {
+			go func() { <-mqsendch }()
 		}
 
-		if mqfrmch != nil {
-			go func() {
-				select {
-				case <-mqfrmch:
-				case <-mqinerrch:
-				}
-			}()
+		if mqrecvch != nil {
+			go func() { <-mqrecvch }()
 		}
 
-		if wsoutokch != nil {
-			go func() {
-				select {
-				case <-wsoutokch:
-				case <-wsouterrch:
-				}
-			}()
+		if wssendch != nil {
+			go func() { <-wssendch }()
 		}
 	}))
 
@@ -196,47 +163,41 @@ func main() {
 	}
 }
 
-func wssend(wsconn *websocket.Conn, frm frame.Frame, okch chan struct{}, errch chan<- error) {
-	err := websocket.JSON.Send(wsconn, frm) // blocking. needs a goroutine
-	if err == nil {
-		okch <- struct{}{}
-	} else {
-		errch <- err
-	}
+type recvResult struct {
+	frame frame.Frame
+	err   error
 }
 
-func wsrecv(wsconn *websocket.Conn, frmch chan<- frame.Frame, errch chan<- error) {
+type sendResult struct {
+	err error
+}
+
+func wssend(wsconn *websocket.Conn, frm frame.Frame, resultch chan<- sendResult) {
+	err := websocket.JSON.Send(wsconn, frm) // blocking. needs a goroutine
+	resultch <- sendResult{err}
+}
+
+func wsrecv(wsconn *websocket.Conn, resultch chan<- recvResult) {
 	var frm frame.Frame
 	err := websocket.JSON.Receive(wsconn, &frm) // blocking. needs a goroutine
-	if err == nil {
-		frmch <- frm
-	} else {
-		errch <- err
-	}
+	resultch <- recvResult{frm, err}
 }
 
-func mqsend(mqchan *amqp.Channel, frm frame.Frame, okch chan<- struct{}, errch chan<- error) {
+func mqsend(mqchan *amqp.Channel, frm frame.Frame, resultch chan<- sendResult) {
 	b, _ := json.Marshal(frm)
 	err := mqchan.Publish("", "guest", false, false, amqp.Publishing{ContentType: "application/json", Body: b}) // blocking. needs a goroutine
-	if err == nil {
-		okch <- struct{}{}
-	} else {
-		errch <- err
-	}
+	resultch <- sendResult{err}
 }
 
-func mqrecv(mqinch <-chan amqp.Delivery, frmch chan<- frame.Frame, errch chan<- error) {
+func mqrecv(mqinch <-chan amqp.Delivery, resultch chan<- recvResult) {
+	var frm frame.Frame
 	delivery, ok := <-mqinch
 	if !ok {
-		errch <- io.EOF
+		resultch <- recvResult{frm, io.EOF}
+		return
 	}
-	var frm frame.Frame
 	err := json.Unmarshal(delivery.Body, &frm)
-	if err == nil {
-		frmch <- frm
-	} else {
-		errch <- err
-	}
+	resultch <- recvResult{frm, err}
 }
 
 func nop(args ...any) {
