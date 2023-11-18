@@ -79,21 +79,21 @@ func main() {
 		var (
 			// ws -> mq
 			wsrecvchmemo chan recvResult = make(chan recvResult)
-			mqsendchmemo chan sendResult = make(chan sendResult)
+			mqfrwdchmemo chan frwdResult = make(chan frwdResult)
 			wsrecvch     chan recvResult = nil
-			mqsendch     chan sendResult = nil
+			mqfrwdch     chan frwdResult = nil
 
 			// mq -> ws
 			mqrecvchmemo chan recvResult = make(chan recvResult)
-			wssendchmemo chan sendResult = make(chan sendResult)
+			wsfrwdchmemo chan frwdResult = make(chan frwdResult)
 			mqrecvch     chan recvResult = nil
-			wssendch     chan sendResult = nil
+			wsfrwdch     chan frwdResult = nil
 		)
 
-		wsrecvch, mqsendch = wsrecvchmemo, nil
+		wsrecvch, mqfrwdch = wsrecvchmemo, nil
 		go wsrecv(wsconn, wsrecvch)
 
-		mqrecvch, wssendch = mqrecvchmemo, nil
+		mqrecvch, wsfrwdch = mqrecvchmemo, nil
 		go mqrecv(mqinch, mqrecvch)
 
 		abort := false
@@ -107,16 +107,18 @@ func main() {
 					abort = true
 					break
 				}
-				mqsendch = mqsendchmemo
-				go mqsend(mqchan, result.frame, mqsendch)
+				// validate frame
+				mqfrwdch = mqfrwdchmemo
+				go mqfrwd(mqchan, result.frame, mqfrwdch)
 
-			case result := <-mqsendch:
-				mqsendch = nil
+			case result := <-mqfrwdch:
+				mqfrwdch = nil
 				if result.err != nil {
 					errorf("error: %v", result.err)
 					abort = true
 					break
 				}
+				// confirm forward
 				wsrecvch = wsrecvchmemo
 				go wsrecv(wsconn, wsrecvch)
 
@@ -127,16 +129,18 @@ func main() {
 					abort = true
 					break
 				}
-				wssendch = wssendchmemo
-				go wssend(wsconn, result.frame, wssendch)
+				// validate frame
+				wsfrwdch = wsfrwdchmemo
+				go wsfrwd(wsconn, result.frame, wsfrwdch)
 
-			case result := <-wssendch:
-				wssendch = nil
+			case result := <-wsfrwdch:
+				wsfrwdch = nil
 				if result.err != nil {
 					errorf("error: %v", result.err)
 					abort = true
 					break
 				}
+				// confirm forward
 				mqrecvch = mqrecvchmemo
 				go mqrecv(mqinch, mqrecvch)
 			}
@@ -146,16 +150,16 @@ func main() {
 			go func() { <-wsrecvch }()
 		}
 
-		if mqsendch != nil {
-			go func() { <-mqsendch }()
+		if mqfrwdch != nil {
+			go func() { <-mqfrwdch }()
 		}
 
 		if mqrecvch != nil {
 			go func() { <-mqrecvch }()
 		}
 
-		if wssendch != nil {
-			go func() { <-wssendch }()
+		if wsfrwdch != nil {
+			go func() { <-wsfrwdch }()
 		}
 	}))
 
@@ -165,18 +169,22 @@ func main() {
 	}
 }
 
+type recvFunc func(chan<- recvResult)
+
+type frwdFunc func(frame.Frame, chan<- frwdResult)
+
 type recvResult struct {
 	frame frame.Frame
 	err   error
 }
 
-type sendResult struct {
+type frwdResult struct {
 	err error
 }
 
-func wssend(wsconn *websocket.Conn, frm frame.Frame, resultch chan<- sendResult) {
+func wsfrwd(wsconn *websocket.Conn, frm frame.Frame, resultch chan<- frwdResult) {
 	err := websocket.JSON.Send(wsconn, frm) // blocking. needs a goroutine
-	resultch <- sendResult{err}
+	resultch <- frwdResult{err}
 }
 
 func wsrecv(wsconn *websocket.Conn, resultch chan<- recvResult) {
@@ -185,10 +193,10 @@ func wsrecv(wsconn *websocket.Conn, resultch chan<- recvResult) {
 	resultch <- recvResult{frm, err}
 }
 
-func mqsend(mqchan *amqp.Channel, frm frame.Frame, resultch chan<- sendResult) {
+func mqfrwd(mqchan *amqp.Channel, frm frame.Frame, resultch chan<- frwdResult) {
 	b, _ := json.Marshal(frm)
 	err := mqchan.Publish("", "guest", false, false, amqp.Publishing{ContentType: "application/json", Body: b}) // blocking. needs a goroutine
-	resultch <- sendResult{err}
+	resultch <- frwdResult{err}
 }
 
 func mqrecv(mqinch <-chan amqp.Delivery, resultch chan<- recvResult) {

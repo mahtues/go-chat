@@ -30,6 +30,12 @@ func Errorf(format string, v ...any) {
 	stdlog.Output(2, fmt.Sprintf(format, v...))
 }
 
+func Panicf(format string, v ...any) {
+	s := fmt.Sprintf(format, v...)
+	stdlog.Output(2, s)
+	panic(s)
+}
+
 func Fatalf(format string, v ...any) {
 	stdlog.Output(2, fmt.Sprintf(format, v...))
 	os.Exit(1)
