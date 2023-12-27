@@ -3,14 +3,14 @@ package ws
 import (
 	"sync"
 
-	"github.com/mahtues/go-chat/frame"
+	"github.com/mahtues/go-chat/data"
 	"golang.org/x/net/websocket"
 )
 
 func NewRecver(ws *websocket.Conn) *Recver {
 	r := &Recver{
 		ws:        ws,
-		outch:     make(chan frame.Frame),
+		outch:     make(chan data.Event),
 		closech:   make(chan chan error),
 		closeonce: sync.Once{},
 	}
@@ -20,13 +20,13 @@ func NewRecver(ws *websocket.Conn) *Recver {
 
 type Recver struct {
 	ws        *websocket.Conn
-	outch     chan frame.Frame
+	outch     chan data.Event
 	closech   chan chan error
 	err       error
 	closeonce sync.Once
 }
 
-func (r *Recver) Ch() <-chan frame.Frame {
+func (r *Recver) Ch() <-chan data.Event {
 	return r.outch
 }
 
@@ -41,13 +41,13 @@ func (r *Recver) Close() error {
 
 func (r *Recver) loop() {
 	var (
-		frm         frame.Frame
-		framech     chan frame.Frame = nil
-		framechmemo chan frame.Frame = make(chan frame.Frame)
-		err         error            = nil
-		errch       chan error       = nil
-		errchmemo   chan error       = make(chan error)
-		outch       chan frame.Frame = nil
+		frm         data.Event
+		framech     chan data.Event = nil
+		framechmemo chan data.Event = make(chan data.Event)
+		err         error           = nil
+		errch       chan error      = nil
+		errchmemo   chan error      = make(chan error)
+		outch       chan data.Event = nil
 	)
 
 	framech, errch, outch = framechmemo, errchmemo, nil
@@ -72,8 +72,8 @@ func (r *Recver) loop() {
 	}
 }
 
-func recv(ws *websocket.Conn, framech chan<- frame.Frame, errch chan<- error) {
-	var frm frame.Frame
+func recv(ws *websocket.Conn, framech chan<- data.Event, errch chan<- error) {
+	var frm data.Event
 	err := websocket.JSON.Receive(ws, &frm) // blocking
 	if err != nil {
 		errch <- err
@@ -82,7 +82,7 @@ func recv(ws *websocket.Conn, framech chan<- frame.Frame, errch chan<- error) {
 	}
 }
 
-func cleanup(framech <-chan frame.Frame, errch <-chan error) {
+func cleanup(framech <-chan data.Event, errch <-chan error) {
 	// handle hanging recv() goroutine
 	if framech != nil || errch != nil {
 		go func() {

@@ -3,14 +3,14 @@ package ws
 import (
 	"sync"
 
-	"github.com/mahtues/go-chat/frame"
+	"github.com/mahtues/go-chat/data"
 	"golang.org/x/net/websocket"
 )
 
 func NewSender(ws *websocket.Conn) *Sender {
 	r := &Sender{
 		ws:        ws,
-		inch:      make(chan frame.Frame),
+		inch:      make(chan data.Event),
 		closech:   make(chan chan error),
 		closeonce: sync.Once{},
 	}
@@ -20,13 +20,13 @@ func NewSender(ws *websocket.Conn) *Sender {
 
 type Sender struct {
 	ws        *websocket.Conn
-	inch      chan frame.Frame
+	inch      chan data.Event
 	closech   chan chan error
 	err       error
 	closeonce sync.Once
 }
 
-func (r *Sender) Ch() chan<- frame.Frame {
+func (r *Sender) Ch() chan<- data.Event {
 	return r.inch
 }
 
@@ -41,13 +41,13 @@ func (r *Sender) Close() error {
 
 func (r *Sender) loop() {
 	var (
-		frm       frame.Frame
-		okch      chan struct{}    = nil
-		okchmemo  chan struct{}    = make(chan struct{})
-		err       error            = nil
-		errch     chan error       = nil
-		errchmemo chan error       = make(chan error)
-		inch      chan frame.Frame = nil
+		frm       data.Event
+		okch      chan struct{}   = nil
+		okchmemo  chan struct{}   = make(chan struct{})
+		err       error           = nil
+		errch     chan error      = nil
+		errchmemo chan error      = make(chan error)
+		inch      chan data.Event = nil
 	)
 
 	okch, errch, inch = nil, nil, r.inch
@@ -71,7 +71,7 @@ func (r *Sender) loop() {
 	}
 }
 
-func send(ws *websocket.Conn, frm frame.Frame, okch chan<- struct{}, errch chan<- error) {
+func send(ws *websocket.Conn, frm data.Event, okch chan<- struct{}, errch chan<- error) {
 	err := websocket.JSON.Send(ws, frm) // blocking
 	if err != nil {
 		errch <- err

@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/net/websocket"
 
-	"github.com/mahtues/go-chat/frame"
+	"github.com/mahtues/go-chat/data"
 	"github.com/mahtues/go-chat/log"
 	"github.com/mahtues/go-chat/misc"
 
@@ -80,14 +80,14 @@ func main() {
 			// ws -> mq
 			wsrecvchmemo chan recvResult = make(chan recvResult)
 			mqfrwdchmemo chan frwdResult = make(chan frwdResult)
-			wsrecvch     chan recvResult = nil
-			mqfrwdch     chan frwdResult = nil
+			wsrecvch     chan recvResult
+			mqfrwdch     chan frwdResult
 
 			// mq -> ws
 			mqrecvchmemo chan recvResult = make(chan recvResult)
 			wsfrwdchmemo chan frwdResult = make(chan frwdResult)
-			mqrecvch     chan recvResult = nil
-			wsfrwdch     chan frwdResult = nil
+			mqrecvch     chan recvResult
+			wsfrwdch     chan frwdResult
 		)
 
 		wsrecvch, mqfrwdch = wsrecvchmemo, nil
@@ -171,10 +171,10 @@ func main() {
 
 type recvFunc func(chan<- recvResult)
 
-type frwdFunc func(frame.Frame, chan<- frwdResult)
+type frwdFunc func(data.Event, chan<- frwdResult)
 
 type recvResult struct {
-	frame frame.Frame
+	frame data.Event
 	err   error
 }
 
@@ -182,25 +182,25 @@ type frwdResult struct {
 	err error
 }
 
-func wsfrwd(wsconn *websocket.Conn, frm frame.Frame, resultch chan<- frwdResult) {
+func wsfrwd(wsconn *websocket.Conn, frm data.Event, resultch chan<- frwdResult) {
 	err := websocket.JSON.Send(wsconn, frm) // blocking. needs a goroutine
 	resultch <- frwdResult{err}
 }
 
 func wsrecv(wsconn *websocket.Conn, resultch chan<- recvResult) {
-	var frm frame.Frame
+	var frm data.Event
 	err := websocket.JSON.Receive(wsconn, &frm) // blocking. needs a goroutine
 	resultch <- recvResult{frm, err}
 }
 
-func mqfrwd(mqchan *amqp.Channel, frm frame.Frame, resultch chan<- frwdResult) {
+func mqfrwd(mqchan *amqp.Channel, frm data.Event, resultch chan<- frwdResult) {
 	b, _ := json.Marshal(frm)
 	err := mqchan.Publish("", "guest", false, false, amqp.Publishing{ContentType: "application/json", Body: b}) // blocking. needs a goroutine
 	resultch <- frwdResult{err}
 }
 
 func mqrecv(mqinch <-chan amqp.Delivery, resultch chan<- recvResult) {
-	var frm frame.Frame
+	var frm data.Event
 	delivery, ok := <-mqinch
 	if !ok {
 		resultch <- recvResult{frm, io.EOF}
